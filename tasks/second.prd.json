@@ -1,0 +1,359 @@
+{
+    "name": "Azure Virtual Desktop Multi-Tenant Environment with OpenTofu",
+    "description": "Build a production-grade Azure Virtual Desktop (AVD) environment supporting both shared multi-tenant hosting and dedicated single-tenant deployments. The solution must follow Azure Landing Zone best practices, align with the Well-Architected Framework, and be fully automated using OpenTofu with modular, DRY configurations.",
+    "branchName": "feature/avd-multi-tenant-opentofu",
+    "userStories": [
+        {
+            "id": "US-001",
+            "title": "Design Azure Landing Zone structure with Hub-and-Spoke networking",
+            "description": "As an infrastructure architect, I want a properly segmented Azure landing zone with Hub-and-Spoke networking so that shared services are centralized and workloads are isolated by spoke.",
+            "acceptanceCriteria": [
+                "Hub VNet created with core services (Bastion, NAT Gateway, ExpressRoute gateway)",
+                "Shared spoke VNet for Application Landing Zone",
+                "Dedicated spoke VNet template created for customer-specific spokes",
+                "Hub-to-spoke peering configured with proper routing",
+                "Network security groups (NSGs) define traffic rules per spoke",
+                "Documentation describes network topology and isolation boundaries",
+                "tofu fmt -check passes",
+                "tofu validate passes",
+                "checkov -f <file> --framework opentofu passes"
+            ],
+            "priority": 1,
+            "passes": true,
+            "notes": "",
+            "dependsOn": [],
+            "completionNotes": "Completed by agent"
+        },
+        {
+            "id": "US-002",
+            "title": "Create shared Application Landing Zone for multi-tenant hosting",
+            "description": "As a platform operator, I want a dedicated Application Landing Zone spoke for the shared AVD environment so that all customers can be hosted efficiently while maintaining logical separation.",
+            "acceptanceCriteria": [
+                "Spoke VNet created in landing zone (separate from hub)",
+                "Subnet structure: AVD hosts, FSLogix storage, application resources",
+                "Network policies and NSGs configured for AVD requirements",
+                "Integration with hub services (DNS, Bastion, firewalls)",
+                "Resource group structure aligned with Azure best practices",
+                "Terraform outputs expose VNet/subnet IDs for downstream modules",
+                "tofu fmt -check passes",
+                "tofu validate passes",
+                "checkov -f <file> --framework opentofu passes"
+            ],
+            "priority": 2,
+            "passes": true,
+            "notes": "",
+            "dependsOn": ["US-001"],
+            "completionNotes": "Completed by agent"
+        },
+        {
+            "id": "US-003",
+            "title": "Design reusable Dedicated Customer hosting module",
+            "description": "As a platform engineer, I want a parameterized Terraform module for dedicated customer environments so that each customer can quickly get their own isolated AVD setup.",
+            "acceptanceCriteria": [
+                "Module accepts customer name, user count, and AVD image as inputs",
+                "Module creates customer-specific spoke VNet with proper isolation",
+                "Module creates customer resource group following naming conventions",
+                "Module creates storage account with Premium File Share per customer",
+                "Module creates single AVD host pool with 1 host, auto-scaling to 2-4 hosts",
+                "Module configures Entra Domain Services integration",
+                "Module uses shared golden image from central image builder",
+                "Module outputs workspace ID, host pool ID, and storage endpoints",
+                "Module is fully reusable across different customers",
+                "tofu fmt -check passes",
+                "tofu validate passes",
+                "checkov -f <file> --framework opentofu passes"
+            ],
+            "priority": 3,
+            "passes": true,
+            "notes": "",
+            "dependsOn": [
+                "US-001", "US-002"
+            ],
+            "completionNotes": "Completed by agent"
+        },
+        {
+            "id": "US-004",
+            "title": "Implement shared hosting AVD configuration",
+            "description": "As a platform operator, I want the shared AVD environment configured so that multiple customers can access the LOB application simultaneously with per-customer data isolation.",
+            "acceptanceCriteria": [
+                "Single AVD host pool created in shared Application Landing Zone spoke",
+                "Windows 11 multisession session hosts deployed",
+                "Host pool configured with app groups for the LOB application",
+                "Workspace created linking to host pool and app groups",
+                "Load balancing algorithm configured (breadth-first)",
+                "Scaling plan configured for business hours auto-scaling",
+                "Host pool supports 1-5 concurrent users initially, scalable",
+                "tofu fmt -check passes",
+                "tofu validate passes",
+                "checkov -f <file> --framework opentofu passes"
+            ],
+            "priority": 4,
+            "passes": true,
+            "notes": "",
+            "dependsOn": ["US-002"],
+            "completionNotes": "Completed by agent"
+        }, {
+            "id": "US-005",
+            "title": "Set up Entra Domain Services and FSLogix configuration",
+            "description": "As a security architect, I want Entra Domain Services integrated with FSLogix so that user profiles and group policies are centrally managed across all environments.",
+            "acceptanceCriteria": [
+                "Azure AD Domain Services (Entra Domain Services) deployed",
+                "AADDS domain created and configured",
+                "Hybrid identity synchronization enabled from on-premises if applicable",
+                "FSLogix configuration captures user profiles to shared file shares",
+                "FSLogix rule sets configured per customer/environment",
+                "Group Policy Objects (GPOs) define security baselines for session hosts",
+                "AADDS integrated with both shared and dedicated AVD environments",
+                "tofu fmt -check passes",
+                "tofu validate passes",
+                "checkov -f <file> --framework opentofu passes"
+            ],
+            "priority": 5,
+            "passes": true,
+            "notes": "",
+            "dependsOn": ["US-001"],
+            "completionNotes": "Completed by agent"
+        }, {
+            "id": "US-006",
+            "title": "Create golden image with Azure Image Builder",
+            "description": "As a platform engineer, I want a golden image built automatically so that all AVD session hosts use consistent, hardened Windows 11 multisession configurations.",
+            "acceptanceCriteria": [
+                "Image Builder template created for Windows 11 multisession",
+                "Image includes LOB application and all required dependencies",
+                "Security hardening applied (Windows Defender, firewall rules)",
+                "FSLogix agent installed and configured",
+                "Entra client installed for domain join",
+                "Image Builder pipeline triggers on configuration changes",
+                "Image versioned and accessible via Shared Image Gallery (SIG)",
+                "tofu fmt -check passes",
+                "tofu validate passes",
+                "checkov -f <file> --framework opentofu passes"
+            ],
+            "priority": 6,
+            "passes": true,
+            "notes": "",
+            "dependsOn": ["US-001"],
+            "completionNotes": "Completed by agent"
+        }, {
+            "id": "US-007",
+            "title": "Configure Azure Premium File Shares for customer data isolation",
+            "description": "As a platform architect, I want per-customer Azure Premium File Shares so that each customer's data is isolated and performance is guaranteed.",
+            "acceptanceCriteria": [
+                "One storage account per customer created",
+                "Premium tier file shares provisioned (100GB minimum, scalable)",
+                "SMB security configured (encryption, authentication)",
+                "RBAC roles assigned to customer identities for access",
+                "Backup configured for disaster recovery",
+                "Shared Application Landing Zone has dedicated Premium File Share for App Attach",
+                "File share endpoints exposed via outputs for mounting in AVD",
+                "tofu fmt -check passes",
+                "tofu validate passes",
+                "checkov -f <file> --framework opentofu passes"
+            ],
+            "priority": 7,
+            "passes": false,
+            "notes": "",
+            "dependsOn": ["US-002"]
+        }, {
+            "id": "US-008",
+            "title": "Configure App Attach with centralized application delivery",
+            "description": "As a platform operator, I want App Attach configured so that the LOB application is centrally stored and mounted dynamically to reduce image size and enable rapid application updates.",
+            "acceptanceCriteria": [
+                "Dedicated Premium File Share created in hub or shared spoke for App Attach",
+                "App Attach images properly staged on file share",
+                "App Attach configured in AVD host pool",
+                "Application dynamically mounts for users at session start",
+                "Application updates don't require session host image updates",
+                "Shared and dedicated environments both support App Attach",
+                "tofu fmt -check passes",
+                "tofu validate passes",
+                "checkov -f <file> --framework opentofu passes"
+            ],
+            "priority": 8,
+            "passes": false,
+            "notes": "",
+            "dependsOn": ["US-004", "US-007"]
+        }, {
+            "id": "US-009",
+            "title": "Implement IAM and RBAC for multi-tenant security",
+            "description": "As a security architect, I want fine-grained IAM and RBAC configured so that customers can only access their own resources and data.",
+            "acceptanceCriteria": [
+                "AVD built-in roles (Virtual Machine User Login, Desktop Virtualization User) assigned per customer",
+                "Storage account contributor roles assigned per customer to their file shares only",
+                "Resource group-level RBAC restricts customer access to their resources",
+                "Service principal or managed identity created for automation",
+                "Entra groups created per customer for streamlined access management",
+                "Audit logging enabled for all role assignments",
+                "Documentation defines role hierarchy and access boundaries",
+                "tofu fmt -check passes",
+                "tofu validate passes",
+                "checkov -f <file> --framework opentofu passes"
+            ],
+            "priority": 9,
+            "passes": false,
+            "notes": "",
+            "dependsOn": ["US-002", "US-003", "US-007"]
+        }, {
+            "id": "US-010",
+            "title": "Set up infrastructure bootstrapping",
+            "description": "As a platform operator, I want to bootstrap the entire environment with a single command so that new customers or environments can be deployed rapidly.",
+            "acceptanceCriteria": [
+                "Bootstrap script created to initialize Azure subscription/resource group",
+                "Script provisions landing zone prerequisites (hub, shared spoke, AADDS)",
+                "Script generates Terraform backend configuration",
+                "Script creates initial golden image",
+                "Script provisions shared AVD host pool and resources",
+                "Bootstrap script idempotent and safe to re-run",
+                "Clear documentation on bootstrap prerequisites and parameters",
+                "tofu fmt -check passes",
+                "tofu validate passes",
+                "checkov -f <file> --framework opentofu passes"
+            ],
+            "priority": 10,
+            "passes": false,
+            "notes": "",
+            "dependsOn": [
+                "US-001",
+                "US-002",
+                "US-004",
+                "US-005",
+                "US-006"
+            ]
+        }, {
+            "id": "US-011",
+            "title": "Organize Terraform code as modular, DRY modules",
+            "description": "As a platform engineer, I want code organized into reusable modules so that configurations are maintainable, testable, and follow OpenTofu best practices.",
+            "acceptanceCriteria": [
+                "Module structure created: ./modules/networking, ./modules/avd, ./modules/storage, ./modules/image-builder, ./modules/entra-ds, ./modules/iam",
+                "Shared hosting module created: ./modules/avd-shared",
+                "Reusable dedicated hosting module created: ./modules/avd-dedicated",
+                "Each module has clear inputs, outputs, and variables",
+                "No code duplication across modules",
+                "Shared sub-modules used by both dedicated and shared modules",
+                "Root module composition uses variables to select shared vs. dedicated",
+                "Module documentation includes variable descriptions and usage examples",
+                "All modules pass tofu fmt -check, tofu validate, and Checkov",
+                "Root module includes appropriate variable files (terraform.tfvars)",
+                "tofu fmt -check passes",
+                "tofu validate passes",
+                "checkov -f <file> --framework opentofu passes"
+            ],
+            "priority": 11,
+            "passes": false,
+            "notes": "",
+            "dependsOn": []
+        }, {
+            "id": "US-012",
+            "title": "Integrate Azure Verified Modules (AVM) where applicable",
+            "description": "As a platform engineer, I want to use Azure Verified Modules where available so that we leverage Microsoft-supported, well-tested patterns.",
+            "acceptanceCriteria": [
+                "Identify AVMs applicable to the architecture (networking, VMs, storage, etc.)",
+                "Integrate AVMs for VNet, subnet, storage account, and VM deployment where appropriate",
+                "Document which AVMs are used and why",
+                "Module wrapping done if AVM defaults need customization",
+                "All integrated modules are sourced from official Microsoft AVM registry",
+                "tofu fmt -check passes",
+                "tofu validate passes",
+                "checkov -f <file> --framework opentofu passes"
+            ],
+            "priority": 12,
+            "passes": false,
+            "notes": "",
+            "dependsOn": ["US-011"]
+        }, {
+            "id": "US-013",
+            "title": "Configure security scanning with Checkov",
+            "description": "As a security engineer, I want automated Checkov scanning so that configurations are validated against security best practices before deployment.",
+            "acceptanceCriteria": [
+                "Checkov framework configured for OpenTofu (--framework opentofu)",
+                "Custom policies created for organization-specific rules if needed",
+                "Checkov integrated into CI/CD pipeline (if applicable)",
+                "Critical and high-severity findings documented with remediation plans",
+                "Checkov results exported in reportable format (JSON)",
+                "Documentation explains which checks apply and any documented exceptions",
+                "All configurations pass Checkov scan prior to deployment",
+                "tofu fmt -check passes",
+                "tofu validate passes",
+                "checkov -f <file> --framework opentofu passes"
+            ],
+            "priority": 13,
+            "passes": false,
+            "notes": "",
+            "dependsOn": []
+        }, {
+            "id": "US-014",
+            "title": "Create documentation and operational runbooks",
+            "description": "As an operations team, I want comprehensive documentation so that the environment can be deployed, maintained, and troubleshot effectively.",
+            "acceptanceCriteria": [
+                "README.md created with architecture overview and prerequisites",
+                "Deployment guide with step-by-step instructions",
+                "Variable documentation (what each variable does, valid values)",
+                "Architecture diagram (VNet topology, resource layout, IAM model)",
+                "Runbook for adding a new dedicated customer",
+                "Runbook for scaling shared environment",
+                "Troubleshooting guide for common issues",
+                "Security and compliance documentation",
+                "Backup and disaster recovery procedures documented",
+                "All documentation is clear and operationally focused"
+            ],
+            "priority": 14,
+            "passes": false,
+            "notes": "",
+            "dependsOn": [
+                "US-001",
+                "US-002",
+                "US-003",
+                "US-004",
+                "US-005",
+                "US-006",
+                "US-007",
+                "US-008",
+                "US-009",
+                "US-010",
+                "US-011"
+            ]
+        }, {
+            "id": "US-015",
+            "title": "Implement monitoring and logging",
+            "description": "As an operations team, I want comprehensive monitoring and logging so that issues can be detected and debugged efficiently.",
+            "acceptanceCriteria": [
+                "Log Analytics workspace created",
+                "AVD diagnostic settings configured (session host logs, app group logs)",
+                "Storage account diagnostic settings enabled",
+                "Entra Domain Services logging configured",
+                "Alerts configured for critical events (session host failures, quota limits)",
+                "Cost analysis configured to track spending per customer (shared vs. dedicated)",
+                "Backup monitoring configured for file shares",
+                "tofu fmt -check passes",
+                "tofu validate passes",
+                "checkov -f <file> --framework opentofu passes"
+            ],
+            "priority": 15,
+            "passes": false,
+            "notes": "",
+            "dependsOn": ["US-002", "US-004", "US-005", "US-007"]
+        }, {
+            "id": "US-016",
+            "title": "Configure cost governance and budgets",
+            "description": "As a platform architect, I want cost governance configured so that spending is tracked, budgeted, and anomalies are detected.",
+            "acceptanceCriteria": [
+                "Azure Budgets created per customer (shared and dedicated)",
+                "Cost anomaly detection configured",
+                "Budget alerts configured to notify when thresholds are approached",
+                "Tagging strategy implemented (customer, environment, cost center)",
+                "Cost allocation enabled for chargeback if needed",
+                "Monthly cost reporting configured",
+                "tofu fmt -check passes",
+                "tofu validate passes",
+                "checkov -f <file> --framework opentofu passes"
+            ],
+            "priority": 16,
+            "passes": false,
+            "notes": "",
+            "dependsOn": ["US-002"]
+        }
+    ],
+    "metadata": {
+        "updatedAt": "2026-03-16T07:43:18.793Z"
+    }
+}

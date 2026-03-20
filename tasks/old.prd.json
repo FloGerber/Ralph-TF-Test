@@ -1,0 +1,284 @@
+{
+  "name": "Azure Virtual Desktop Environment with OpenTofu",
+  "branchName": "ralph/avd-opentofu-infrastructure",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Create Hub-and-Spoke Network Foundation",
+      "description": "As an operator, I want a Hub virtual network with spoke networks for Shared and Dedicated hosting so that AVD workloads are logically separated.",
+      "acceptanceCriteria": [
+        "Deploy Hub VNet with Azure Firewall or NVAs",
+        "Create spoke VNet for Shared Hosting Application landing zone",
+        "Create spoke VNet for Dedicated Hosting landing zone",
+        "Configure VNet peering between Hub and spokes",
+        "Implement network security groups with least-privilege rules",
+        "tofu validate passes",
+        "tofu plan passes with no errors",
+        "tofu fmt passes",
+        "Verify deployment via Azure Portal or CLI",
+        "Test network connectivity between components"
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": "",
+      "dependsOn": [],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-002",
+      "title": "Deploy Shared Hosting Application Landing Zone",
+      "description": "As an operator, I want a modular Shared Hosting landing zone so that multiple customers can be onboarded efficiently.",
+      "acceptanceCriteria": [
+        "Create reusable module for Shared Hosting VNet",
+        "Implement customer isolation using NSGs and RBAC",
+        "Configure shared AVD host pools with session hosts",
+        "Set up workspace and application groups",
+        "Create customer-specific resource groups dynamically",
+        "tofu validate passes",
+        "tofu plan passes with no errors",
+        "tofu fmt passes",
+        "Verify deployment via Azure Portal or CLI"
+      ],
+      "priority": 2,
+      "passes": true,
+      "notes": "",
+      "dependsOn": [
+        "US-001",
+        "US-011"
+      ],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-003",
+      "title": "Create Dedicated Hosting Landing Zone Template",
+      "description": "As an operator, I want a reusable Dedicated Hosting landing zone template so that I can deploy isolated environments per customer.",
+      "acceptanceCriteria": [
+        "Create modular Terraform/OpenTofu module for Dedicated Hosting",
+        "Support customer-specific subscription or resource group",
+        "Implement isolated VNet with private endpoints",
+        "Configure dedicated AVD host pools",
+        "Enable parameterization for customer-specific settings",
+        "tofu validate passes",
+        "tofu plan passes with no errors",
+        "tofu fmt passes"
+      ],
+      "priority": 3,
+      "passes": true,
+      "notes": "",
+      "dependsOn": [
+        "US-001",
+        "US-011"
+      ],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-004",
+      "title": "Configure Azure Image Builder for Golden Images",
+      "description": "As an operator, I want automated Golden Image creation using Azure Image Builder so that standardized Windows 11 images are available for AVD hosts.",
+      "acceptanceCriteria": [
+        "Set up Azure Image Builder resource and managed identity",
+        "Create Image Template for Windows 11 multi-session",
+        "Include custom line-of-business applications in image",
+        "Configure image replication to target regions",
+        "Automate image version management",
+        "tofu validate passes",
+        "tofu plan passes with no errors",
+        "tofu fmt passes",
+        "Verify deployment via Azure Portal or CLI"
+      ],
+      "priority": 4,
+      "passes": true,
+      "notes": "",
+      "dependsOn": [],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-005",
+      "title": "Integrate Entra Domain Services",
+      "description": "As an operator, I want Entra Domain Services configured so that FSLogix profile containers and GPOs work correctly.",
+      "acceptanceCriteria": [
+        "Deploy Entra Domain Services with managed domain",
+        "Configure AVD virtual machines to domain join via extension",
+        "Set up FSLogix profile container storage (Azure Files)",
+        "Implement GPO settings for AVD users",
+        "Configure user profile disk (UPD) or FSLogix as fallback",
+        "tofu validate passes",
+        "tofu plan passes with no errors",
+        "tofu fmt passes",
+        "Verify deployment via Azure Portal or CLI"
+      ],
+      "priority": 5,
+      "passes": true,
+      "notes": "",
+      "dependsOn": [
+        "US-011"
+      ],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-006",
+      "title": "Deploy Azure Premium Fileshare per Customer",
+      "description": "As an operator, I want per-customer Azure Premium Fileshare storage so that each customer has isolated profile and application data.",
+      "acceptanceCriteria": [
+        "Create Premium Fileshare for Shared Hosting customers",
+        "Create dedicated Fileshares per Dedicated Hosting customer",
+        "Configure private endpoints for storage security",
+        "Set up role-based access controls per customer",
+        "Configure NTFS permissions for FSLogix",
+        "tofu validate passes",
+        "tofu plan passes with no errors",
+        "tofu fmt passes",
+        "Verify deployment via Azure Portal or CLI"
+      ],
+      "priority": 6,
+      "passes": true,
+      "notes": "",
+      "dependsOn": [
+        "US-001",
+        "US-011"
+      ],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-007",
+      "title": "Implement AVD Session Hosts",
+      "description": "As an operator, I want Windows 11 multi-session hosts deployed and configured so that users can connect to AVD sessions.",
+      "acceptanceCriteria": [
+        "Deploy VM scale sets for session hosts",
+        "Configure Windows 11 Enterprise multi-session OS",
+        "Join machines to Entra Domain Services",
+        "Install AVD agent and configure VM extensions",
+        "Implement load balancing (breadth-first for multi-session)",
+        "tofu validate passes",
+        "tofu plan passes with no errors",
+        "tofu fmt passes",
+        "Verify deployment via Azure Portal or CLI",
+        "Test network connectivity between components"
+      ],
+      "priority": 7,
+      "passes": true,
+      "notes": "",
+      "dependsOn": [
+        "US-001",
+        "US-002",
+        "US-003",
+        "US-004",
+        "US-005",
+        "US-006"
+      ],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-008",
+      "title": "Configure Monitoring with Azure Monitor",
+      "description": "As an operator, I want comprehensive monitoring so that AVD performance and issues can be tracked.",
+      "acceptanceCriteria": [
+        "Set up Log Analytics workspace",
+        "Configure Azure Monitor for VMs insights",
+        "Deploy AVD-specific monitoring solutions",
+        "Create alerting rules for session host health",
+        "Set up dashboards for AVD monitoring",
+        "tofu validate passes",
+        "tofu plan passes with no errors",
+        "tofu fmt passes"
+      ],
+      "priority": 8,
+      "passes": true,
+      "notes": "",
+      "dependsOn": [
+        "US-007"
+      ],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-009",
+      "title": "Implement DRY and Modular Configuration",
+      "description": "As an operator, I want DRY configuration with reusable modules so that the codebase is maintainable and scalable.",
+      "acceptanceCriteria": [
+        "Create reusable modules for: networking, AVD, storage, monitoring",
+        "Use Terragrunt or native OpenTofu for configuration orchestration",
+        "Implement variables and locals for parameterization",
+        "Create example configurations for Shared and Dedicated hosting",
+        "Document module usage and inputs/outputs",
+        "tofu validate passes",
+        "tofu plan passes with no errors",
+        "tofu fmt passes"
+      ],
+      "priority": 9,
+      "passes": true,
+      "notes": "",
+      "dependsOn": [],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-010",
+      "title": "Set Up Remote State Backend",
+      "description": "As an operator, I want remote state storage so that team collaboration and state locking work properly.",
+      "acceptanceCriteria": [
+        "Create Azure Storage Account for state backend",
+        "Configure state locking with Blob storage",
+        "Set up workspaces for different environments",
+        "Enable encryption at rest",
+        "Document backend configuration for team",
+        "tofu validate passes",
+        "tofu plan passes with no errors",
+        "tofu fmt passes"
+      ],
+      "priority": 10,
+      "passes": true,
+      "notes": "",
+      "dependsOn": [],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-011",
+      "title": "Bootstrap Landing Zone Foundation",
+      "description": "As an operator, I want the base Azure infrastructure bootstrapped so that landing zones can be deployed.",
+      "acceptanceCriteria": [
+        "Deploy subscription structure (Management, Connectivity, Shared, Dedicated)",
+        "Set up Management Groups hierarchy",
+        "Configure Azure Policy assignments",
+        "Deploy Log Analytics and Azure Security Center",
+        "Implement cost management tagging strategy",
+        "tofu validate passes",
+        "tofu plan passes with no errors",
+        "tofu fmt passes",
+        "Verify deployment via Azure Portal or CLI"
+      ],
+      "priority": 11,
+      "passes": true,
+      "notes": "",
+      "dependsOn": [],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-012",
+      "title": "Implement Disaster Recovery",
+      "description": "As an operator, I want DR capabilities so that AVD services can fail over to secondary region.",
+      "acceptanceCriteria": [
+        "Deploy secondary region infrastructure",
+        "Configure Geo-redundant storage for Fileshares",
+        "Set up AVD host pools in DR region",
+        "Document failover procedures",
+        "Test DR connectivity and access",
+        "tofu validate passes",
+        "tofu plan passes with no errors",
+        "tofu fmt passes",
+        "Verify deployment via Azure Portal or CLI",
+        "Test network connectivity between components"
+      ],
+      "priority": 12,
+      "passes": true,
+      "notes": "",
+      "dependsOn": [
+        "US-001",
+        "US-006",
+        "US-007"
+      ],
+      "completionNotes": "Completed by agent"
+    }
+  ],
+  "metadata": {
+    "updatedAt": "2026-03-13T08:22:16.442Z"
+  }
+}

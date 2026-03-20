@@ -1,0 +1,18 @@
+framework:
+  - terraform
+
+output:
+  - cli
+  - json
+
+output-file-path: reports/checkov
+
+# Checks suppressed globally (project-wide justifications documented in CHECKOV.md)
+# Individual resource-level suppressions are documented inline with #checkov:skip comments
+skip-check: []
+
+# Compact output to reduce noise
+compact: true
+
+# Quiet mode - only show failures
+quiet: true

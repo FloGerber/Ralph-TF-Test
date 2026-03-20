@@ -1,0 +1,241 @@
+{
+  "name": "Azure Virtual Desktop Multi-Tenant Environment with OpenTofu (v4)",
+  "description": "Close the remaining implementation gaps in the production-grade AVD platform: DNS proxy wiring, App Attach AVD module variables, monitoring wired into AVD, OpenTofu unit tests for all modules, registration token hardening, AVM evaluation, and a full quality gate sweep.",
+  "branchName": "ralph/avd-multi-tenant-v4",
+  "userStories": [
+    {
+      "id": "US-022",
+      "title": "Harden registration token expiry to 2-hour rolling window",
+      "description": "As a security engineer, I want the AVD host pool registration token expiry changed from the hardcoded `2027-12-31` date to a 2-hour rolling window regenerated on each pipeline run, so that a leaked token cannot be used to register unauthorized session hosts.",
+      "acceptanceCriteria": [
+        "`modules/avd/main.tf`: `azurerm_virtual_desktop_host_pool_registration_info.this` — replace `expiration_date = \"2027-12-31T00:00:00Z\"` with `expiration_date = timeadd(timestamp(), \"2h\")`",
+        "`modules/avd/main.tf`: registration info resource gains `lifecycle { replace_triggered_by = [azurerm_virtual_desktop_host_pool.this] }` to ensure token is regenerated when the host pool changes",
+        "`modules/avd/main.tf`: verify the `RegistrationInfoToken` in the DSC extension `settings` block is passed as a `protected_settings` entry (not plain `settings`) to avoid token exposure in plan output — if currently in `settings`, move to `protected_settings`",
+        "`docs/architecture-decisions.md`: token rotation ADR entry added (or updated) with: `timeadd(timestamp(), \"2h\")` pattern; note that this causes the resource to show as \"replace\" on every `tofu plan` — this is expected and by design",
+        "`.github/workflows/` pipeline YAML gains a comment: \"tofu apply regenerates registration token on each run by design\"",
+        "`tofu validate` passes in `modules/avd/`",
+        "tofu fmt -check -recursive passes",
+        "tofu validate passes",
+        "checkov -d . --config-file checkov-config.yaml --compact reports 0 unsuppressed critical/high findings",
+        "tflint --recursive exits 0 with 0 errors"
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": "Tier 1 — Foundation. No cross-story dependencies.",
+      "dependsOn": [],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-023",
+      "title": "Full quality gate sweep — validate and clean up entire codebase",
+      "description": "As a platform engineer, I want to run all quality gates across every module and environment in the repository and fix any remaining formatting, validation, lint, or Checkov issues, so that the codebase is in a clean, deployable state at the end of v4.",
+      "acceptanceCriteria": [
+        "`tofu fmt -recursive` applied; resulting diff is zero (all files already correctly formatted)",
+        "`tofu validate` exits 0 in all of: `bootstrap/`, `networking/hub-and-spoke/`, `modules/networking/`, `modules/avd/`, `modules/storage/`, `modules/monitoring/`, `modules/fslogix/`, `modules/aadds/`, `modules/dedicated/`, `modules/customer/`, `imaging/image-builder/`, `environments/shared/`, `environments/dedicated/`",
+        "`tflint --recursive` exits 0 with 0 errors across the entire repository",
+        "`checkov -d . --config-file checkov-config.yaml --compact` reports 0 unsuppressed critical/high findings; all suppressions have `#checkov:skip=CHECK_ID:justification` inline comments inside the resource block",
+        "`modules/monitoring/main.tf`: verify no standalone `provider \"azurerm\"` block exists (child modules must not declare providers — only root modules may)",
+        "Any child module that contains a top-level `provider` block has it removed",
+        "`CHECKOV.md` suppressed checks register is up to date: all inline `#checkov:skip` annotations in the codebase have a corresponding entry in the register table",
+        "tofu fmt -check -recursive passes",
+        "tofu validate passes",
+        "checkov -d . --config-file checkov-config.yaml --compact reports 0 unsuppressed critical/high findings",
+        "tflint --recursive exits 0 with 0 errors"
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": "Tier 1 — Foundation. No cross-story dependencies. Can be worked in parallel with US-022.",
+      "dependsOn": [],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-015",
+      "title": "Enable Azure Firewall DNS proxy and finalise AADDS DNS wiring",
+      "description": "As a network engineer, I want Azure Firewall DNS proxy enabled in the Firewall Policy and the AADDS DNS wiring verified end-to-end, so that Private DNS resolution and AADDS domain join work correctly from all session hosts.",
+      "acceptanceCriteria": [
+        "`networking/hub-and-spoke/main.tf`: `azurerm_firewall_policy` resource gains a `dns { proxy_enabled = true; servers = length(var.aadds_dns_server_ips) > 0 ? var.aadds_dns_server_ips : [] }` block",
+        "`networking/hub-and-spoke/outputs.tf`: exports `firewall_dns_proxy_enabled` (bool, value = `true`) and `hub_firewall_private_ip` (string — firewall private IP) if not already exported",
+        "`networking/hub-and-spoke/variables.tf`: `aadds_dns_server_ips` variable already exists — verify description says \"populate after AADDS deployment (two-pass)\"",
+        "`docs/architecture-decisions.md`: DNS Proxy ADR updated (or added if missing) with note: first apply with `aadds_dns_server_ips = []`; re-apply after AADDS provisions with actual IPs",
+        "All quality gates pass in `networking/hub-and-spoke/`",
+        "tofu fmt -check -recursive passes",
+        "tofu validate passes",
+        "checkov -d . --config-file checkov-config.yaml --compact reports 0 unsuppressed critical/high findings",
+        "tflint --recursive exits 0 with 0 errors"
+      ],
+      "priority": 2,
+      "passes": true,
+      "notes": "Tier 2 — Implementation. US-015 should precede US-016 (DNS needed for session host connectivity).",
+      "dependsOn": [
+        "US-022",
+        "US-023"
+      ],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-016",
+      "title": "Complete App Attach AVD module variables and RBAC",
+      "description": "As a platform engineer, I want the AVD module to expose App Attach type and package variables, and the session host managed identity to have `Storage File Data SMB Share Contributor` on the App Attach storage account, so that applications can be delivered via App Attach without modifying the base image.",
+      "acceptanceCriteria": [
+        "`modules/avd/variables.tf`: adds `app_attach_type` — `string`, default `\"AppAttach\"`, validation `one_of([\"AppAttach\", \"MsixAppAttach\", \"None\"])`",
+        "`modules/avd/variables.tf`: adds `app_attach_packages` — `list(object({ name = string, path = string }))`, default `[]`",
+        "`modules/avd/main.tf`: when `var.app_attach_type != \"None\"`, `azurerm_virtual_desktop_host_pool` resources gain `start_vm_on_connect = true`",
+        "`modules/dedicated/variables.tf`: forwards `app_attach_type` (default `\"AppAttach\"`) and `app_attach_packages` (default `[]`) to `module.avd`",
+        "`environments/shared/main.tf`: the existing `appattach` storage account (already in `locals.tf`) has `Storage File Data SMB Share Contributor` RBAC assigned to each session host VMSS user-assigned managed identity",
+        "`environments/shared/locals.tf` or `main.tf`: `module.avd` call includes `app_attach_type = \"AppAttach\"`",
+        "`tofu validate` passes in `environments/shared/` and `modules/dedicated/`",
+        "tofu fmt -check -recursive passes",
+        "tofu validate passes",
+        "checkov -d . --config-file checkov-config.yaml --compact reports 0 unsuppressed critical/high findings",
+        "tflint --recursive exits 0 with 0 errors"
+      ],
+      "priority": 2,
+      "passes": true,
+      "notes": "Tier 2 — Implementation. Depends on US-015 (DNS needed for session host connectivity).",
+      "dependsOn": [
+        "US-015"
+      ],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-017",
+      "title": "Wire monitoring module into shared and dedicated environments with AVD-specific alerts",
+      "description": "As an operations engineer, I want the existing `modules/monitoring` module connected to `modules/avd` in both shared and dedicated environments with AVD-specific metric alerts, so that session host health, user connection failures, and VMSS CPU/memory are observable from day one.",
+      "acceptanceCriteria": [
+        "`environments/shared/main.tf`: `module.avd` call gains `log_analytics_workspace_id = module.monitoring.log_analytics_workspace_id`",
+        "`modules/avd/variables.tf`: adds `log_analytics_workspace_id` — `string`, default `\"\"`, description \"Log Analytics workspace resource ID for AVD diagnostic settings\"",
+        "`modules/avd/main.tf`: when `var.log_analytics_workspace_id != \"\"`, `azurerm_monitor_diagnostic_setting` is created for each `azurerm_virtual_desktop_host_pool` resource, forwarding `Connection` and `Error` logs to the workspace",
+        "`environments/shared/locals.tf`: `metric_alerts` local includes at minimum three AVD-relevant alerts: (1) Session host CPU > 85% for 5 minutes (severity 2); (2) Session host available memory < 512 MB (severity 2); (3) Host pool user connection failures",
+        "`modules/dedicated/variables.tf`: adds `log_analytics_workspace_id` (string, default `\"\"`)",
+        "`modules/dedicated/main.tf`: passes `log_analytics_workspace_id` to `module.avd`",
+        "`environments/dedicated/customer-example.tf` (or equivalent): example dedicated customer call includes `log_analytics_workspace_id`",
+        "`tofu validate` passes in `environments/shared/` and `modules/dedicated/`",
+        "tofu fmt -check -recursive passes",
+        "tofu validate passes",
+        "checkov -d . --config-file checkov-config.yaml --compact reports 0 unsuppressed critical/high findings",
+        "tflint --recursive exits 0 with 0 errors"
+      ],
+      "priority": 2,
+      "passes": true,
+      "notes": "Tier 2 — Implementation. Can be worked in parallel with US-015 and US-016.",
+      "dependsOn": [
+        "US-022",
+        "US-023"
+      ],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-021",
+      "title": "Evaluate five additional AVM modules and update AVM.md",
+      "description": "As a platform engineer, I want five additional Azure Verified Modules evaluated against this codebase and the decisions recorded in `AVM.md`, so that we maintain a complete, up-to-date record of AVM adoption decisions.",
+      "acceptanceCriteria": [
+        "`AVM.md` updated with five new evaluation sections using the same format as the three existing entries (Module name + registry URL + GitHub URL + version, \"What it does\", \"Why adopted/rejected\", \"Decision\")",
+        "Modules evaluated: `azure/avm-res-keyvault-vault`, `azure/avm-res-operationalinsights-workspace`, `azure/avm-res-network-firewallpolicy`, `azure/avm-res-managedidentity-userassignedidentity`, `azure/avm-res-resources-resourcegroup`",
+        "Summary table at top of `AVM.md` updated with all eight entries (three existing + five new)",
+        "\"Recommendation for Future Review\" section updated with any new conditions identified during evaluation",
+        "No `.tf` files are changed unless an evaluation results in an explicit adoption decision",
+        "Quality gates pass: `tofu fmt -check -recursive` on existing files",
+        "tofu fmt -check -recursive passes",
+        "tofu validate passes",
+        "checkov -d . --config-file checkov-config.yaml --compact reports 0 unsuppressed critical/high findings",
+        "tflint --recursive exits 0 with 0 errors"
+      ],
+      "priority": 2,
+      "passes": true,
+      "notes": "Tier 4 — AVM Research. Documentation only; can run in parallel with Tier 2 or 3. No .tf changes expected.",
+      "dependsOn": [
+        "US-022",
+        "US-023"
+      ],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-018",
+      "title": "OpenTofu unit tests for `modules/networking`",
+      "description": "As a platform engineer, I want `.tftest.hcl` unit tests for `modules/networking` using mock providers so that the module's resource structure, variable defaults, and NSG rule generation are verified without requiring Azure credentials or a live environment.",
+      "acceptanceCriteria": [
+        "`modules/networking/tests/unit.tftest.hcl` created",
+        "Test file uses `mock_provider \"azurerm\" {}` block (OpenTofu 1.7+ mock syntax)",
+        "Run block `test_default_vnet_config`: calls module with minimal required variables; asserts `output.vnet_id` is not empty string; asserts `output.subnet_ids` map contains expected subnet keys",
+        "Run block `test_nsg_rules_applied`: calls module with a custom `nsg_rules` list; asserts plan succeeds; asserts NSG resource count > 0",
+        "Run block `test_firewall_disabled`: calls module with `enable_firewall = false`; asserts no `azurerm_firewall` resource is planned",
+        "`modules/networking/tests/mock.tfvars` created with all required variables populated with synthetic values (no real Azure resource IDs or secrets)",
+        "`tofu test` exits 0 in `modules/networking/`",
+        "tofu fmt -check -recursive passes",
+        "tofu validate passes",
+        "checkov -d . --config-file checkov-config.yaml --compact reports 0 unsuppressed critical/high findings",
+        "tflint --recursive exits 0 with 0 errors",
+        "tofu test exits 0 in target module directory"
+      ],
+      "priority": 3,
+      "passes": true,
+      "notes": "Tier 3 — Tests. Depends on Tier 1 + 2 being clean (modules/networking is covered by US-015 and US-023).",
+      "dependsOn": [
+        "US-015",
+        "US-016",
+        "US-017"
+      ],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-019",
+      "title": "OpenTofu unit tests for `modules/avd`",
+      "description": "As a platform engineer, I want `.tftest.hcl` unit tests for `modules/avd` using mock providers so that host pool creation, application group association, VMSS session host configuration, and scaling plan wiring are validated without Azure credentials.",
+      "acceptanceCriteria": [
+        "`modules/avd/tests/unit.tftest.hcl` created",
+        "Uses `mock_provider \"azurerm\" {}` and `mock_provider \"random\" {}`",
+        "Run block `test_host_pool_created`: minimal config; asserts `output.host_pool_ids` map is non-empty",
+        "Run block `test_app_group_workspace_association`: provides one host pool + one workspace + one app group; asserts no plan errors",
+        "Run block `test_vmss_session_hosts`: provides one `session_host_config` entry; asserts `azurerm_orchestrated_virtual_machine_scale_set` count = 1 in plan",
+        "Run block `test_scaling_plan_optional`: first run with `scaling_plan_config = null` asserts no scaling plan resource; second run with `scaling_plan_config` populated asserts scaling plan count = 1",
+        "`modules/avd/tests/mock.tfvars` created with all required variables populated with synthetic values",
+        "`tofu test` exits 0 in `modules/avd/`",
+        "tofu fmt -check -recursive passes",
+        "tofu validate passes",
+        "checkov -d . --config-file checkov-config.yaml --compact reports 0 unsuppressed critical/high findings",
+        "tflint --recursive exits 0 with 0 errors",
+        "tofu test exits 0 in target module directory"
+      ],
+      "priority": 3,
+      "passes": true,
+      "notes": "Tier 3 — Tests. Depends on US-016 (App Attach vars) and US-017 (monitoring vars) being added to modules/avd first.",
+      "dependsOn": [
+        "US-016",
+        "US-017"
+      ],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-020",
+      "title": "OpenTofu unit tests for `modules/storage` and `modules/dedicated`",
+      "description": "As a platform engineer, I want `.tftest.hcl` unit tests for `modules/storage` and `modules/dedicated` using mock providers so that storage account creation, file share provisioning, private endpoint configuration, and the complete dedicated customer module composition are verified without Azure credentials.",
+      "acceptanceCriteria": [
+        "`modules/storage/tests/unit.tftest.hcl` created",
+        "Storage run block `test_storage_accounts_created`: provides two entries in `storage_account_config`; asserts two `azurerm_storage_account` resources in plan",
+        "Storage run block `test_file_shares_created`: provides one storage account + two file shares in config; asserts two `azurerm_storage_share` resources",
+        "Storage run block `test_private_endpoints_optional`: verifies `azurerm_private_endpoint` count = 0 when `private_endpoint_config = []`; count = 1 when one entry provided",
+        "`modules/dedicated/tests/unit.tftest.hcl` created",
+        "Dedicated run block `test_default_dedicated_module`: provides only `customer_name`, `location`, `vnet_config`, `resource_group_name`; asserts no plan errors; asserts `output.host_pool_ids` is non-empty",
+        "Dedicated run block `test_hub_peering`: provides `hub_vnet_id` and `hub_vnet_name`; asserts `azurerm_virtual_network_peering` count ≥ 1",
+        "Mock `.tfvars` files provided for both modules (`modules/storage/tests/mock.tfvars`, `modules/dedicated/tests/mock.tfvars`)",
+        "`tofu test` exits 0 in both `modules/storage/` and `modules/dedicated/`",
+        "tofu fmt -check -recursive passes",
+        "tofu validate passes",
+        "checkov -d . --config-file checkov-config.yaml --compact reports 0 unsuppressed critical/high findings",
+        "tflint --recursive exits 0 with 0 errors",
+        "tofu test exits 0 in target module directory"
+      ],
+      "priority": 3,
+      "passes": true,
+      "notes": "Tier 3 — Tests. Depends on US-016 (App Attach vars in modules/dedicated) being complete.",
+      "dependsOn": [
+        "US-016",
+        "US-017"
+      ],
+      "completionNotes": "Completed by agent"
+    }
+  ],
+  "metadata": {
+    "updatedAt": "2026-03-20T06:40:40.247Z"
+  }
+}

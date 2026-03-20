@@ -1,0 +1,377 @@
+{
+  "name": "Azure Virtual Desktop Multi-Tenant Environment with OpenTofu",
+  "description": "Build a production-grade Azure Virtual Desktop (AVD) environment supporting shared multi-tenant hosting (RemoteApp only) and dedicated single-tenant deployments using OpenTofu with modular, DRY configurations, Hub-and-Spoke networking, AADDS, FSLogix, Azure Image Builder, and Checkov security scanning.",
+  "branchName": "ralph/avd-multi-tenant-opentofu",
+  "userStories": [
+    {
+      "id": "US-011",
+      "title": "Fix known code defects and inconsistencies across modules",
+      "description": "As a platform engineer, I want all known bugs and inconsistencies in the existing module code resolved so that `tofu validate` and `tofu plan` complete without errors across all layers.",
+      "acceptanceCriteria": [
+        "`modules/networking/main.tf` line 127: fix `virtual_network_name = var.peering_config.remote_vnet_id` to reference the actual remote VNet name by adding `remote_vnet_name` field to `peering_config` variable object",
+        "`modules/fslogix/main.tf` lines 136-141: replace invalid `dynamic \"virtual_network_subnet_ids\"` block with `virtual_network_subnet_ids = var.subnet_id != \"\" ? [var.subnet_id] : []` as a direct attribute",
+        "`modules/aadds/main.tf` line 66: verify `azurerm_active_directory_domain_service_group_policy` exists in azurerm 4.x; if not, replace with `null_resource` + documented PowerShell approach",
+        "`modules/avd/main.tf` line 186: fix workspace association — workspace lookup key should be `each.value.name`, not `each.value.host_pool_name`",
+        "`bootstrap/main.tf` line 87: remove or fix incorrect self-assignment of storage account managed identity",
+        "`main.tf` lines 33-38: remove calls to `environments/shared` and `environments/dedicated` as child modules (they are root configs with own backends); add `WORKSPACES.md` explaining layered deployment order",
+        "All modules pass `tofu validate` with no errors after fixes",
+        "`tofu fmt -check` passes",
+        "`tofu validate` passes",
+        "`tofu plan` completes without errors",
+        "`checkov -d . --framework opentofu --compact` passes with 0 unsuppressed critical/high findings",
+        "`tflint --recursive` passes"
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": "Must be done first — FR-12 requires all known defects resolved before new feature work.",
+      "dependsOn": [],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-001",
+      "title": "Extend bootstrap to provision full platform landing zone",
+      "description": "As a platform operator, I want the bootstrap layer to provision the state backend, Hub VNet with Azure Firewall, Private DNS Zones, management groups, and Log Analytics in a single `tofu apply`, so that the platform foundation is ready before any workload is deployed.",
+      "acceptanceCriteria": [
+        "`bootstrap/main.tf` provisions: resource group, state storage account + container, management groups (`Landing Zones`, `Management`, `Connectivity`, `Shared`, `Dedicated`), Azure Policy (`CostCenter` tag audit)",
+        "`bootstrap/main.tf` provisions: Hub VNet (`10.0.0.0/16`), subnets `GatewaySubnet`, `AzureFirewallSubnet`, `snet-management`, `snet-frontend`, `snet-backend`",
+        "Azure Firewall (Standard SKU) with Firewall Policy (threat intel: Deny, IDS: Deny) deployed in hub",
+        "Private DNS Zones for `privatelink.file.core.windows.net` and `privatelink.blob.core.windows.net` created and linked to hub VNet",
+        "Log Analytics workspace `law-bootstrap-<env>` provisioned with correct retention",
+        "Microsoft Defender for Cloud enabled for `VirtualMachines`",
+        "OIDC service principal guidance documented in `BACKEND.md` with Service Principal app ID and required role assignments as outputs",
+        "All state backend outputs remain backward-compatible (no breaking changes)",
+        "`tofu fmt -check` passes",
+        "`tofu validate` passes",
+        "`tofu plan` completes without errors",
+        "`checkov -d . --framework opentofu --compact` passes with 0 unsuppressed critical/high findings or documented suppressions",
+        "`tflint --recursive` passes",
+        "Verify Checkov passes with no `CKV_AZURE_*` critical findings",
+        "Verify `tofu validate` succeeds within both `bootstrap/` and root module contexts"
+      ],
+      "priority": 2,
+      "passes": true,
+      "notes": "Depends on US-011 to ensure existing bugs are fixed first.",
+      "dependsOn": [
+        "US-011"
+      ],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-002",
+      "title": "Refactor Hub-and-Spoke networking into standalone platform layer",
+      "description": "As a platform engineer, I want the Hub-and-Spoke networking code moved into its own deployable root module under `networking/hub-and-spoke/` so that it can be versioned, planned, and applied independently from workloads.",
+      "acceptanceCriteria": [
+        "`networking/hub-and-spoke/main.tf` manages all hub and static spoke VNets (hub, shared spoke, dedicated spoke template)",
+        "Hub-to-shared and hub-to-dedicated peerings are bidirectional in the same module",
+        "`azurerm_virtual_network_peering.reverse` bug fixed: references the actual VNet name of the remote network, not `remote_vnet_id`",
+        "`networking/hub-and-spoke/` has its own `backend.hcl` with state key `networking/hub-and-spoke`",
+        "Outputs export: `hub_vnet_id`, `shared_spoke_vnet_id`, `dedicated_spoke_vnet_id`, `hub_firewall_private_ip`, `subnet_ids` (map)",
+        "Private DNS Zone IDs exported for consumption by workload modules",
+        "`networking/hub-and-spoke/README.md` updated",
+        "`tofu fmt -check` passes",
+        "`tofu validate` passes",
+        "`tofu plan` completes without errors",
+        "`checkov -d . --framework opentofu --compact` passes with 0 unsuppressed critical/high findings or documented suppressions",
+        "`tflint --recursive` passes",
+        "Verify Checkov passes with no `CKV_AZURE_*` critical findings",
+        "Verify `tofu validate` succeeds within both `bootstrap/` and root module contexts"
+      ],
+      "priority": 3,
+      "passes": true,
+      "notes": "Depends on US-001 bootstrap being complete so hub resources exist.",
+      "dependsOn": [
+        "US-001"
+      ],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-003",
+      "title": "Migrate session hosts from classic VMSS to Flexible VMSS",
+      "description": "As a platform engineer, I want session hosts to use `azurerm_orchestrated_virtual_machine_scale_set` (Flexible Orchestration mode) so that AVD extension support, rolling upgrades, and zone-redundancy follow Microsoft's recommended deployment model.",
+      "acceptanceCriteria": [
+        "Remove `azurerm_virtual_machine_scale_set` (classic) resource from `modules/avd/main.tf`",
+        "Add `azurerm_orchestrated_virtual_machine_scale_set` with: `platform_fault_domain_count = 1`, `single_placement_group = false`, `zones = [\"1\",\"2\",\"3\"]` (configurable)",
+        "OS disk configured: `storage_account_type = \"Premium_LRS\"`, `disk_size_gb` variable-driven",
+        "`os_profile` block uses `windows_configuration` sub-block (Flexible VMSS syntax)",
+        "`SystemAssigned` managed identity retained",
+        "AVD DSC extension (`Microsoft.PowerShell.DSC`) added as `azurerm_virtual_machine_scale_set_extension` for host pool registration, replacing custom PowerShell token injection",
+        "Domain join extension (`JsonADDomainExtension`) retained and chained after DSC extension via `provision_after_extensions`",
+        "`var.session_host_config` schema updated: remove `admin_password` field; add `enable_automatic_os_upgrade`, `zones`",
+        "`modules/dedicated/main.tf` `session_host_config` local updated to match new schema",
+        "`modules/avd/variables.tf` and `modules/avd/outputs.tf` updated accordingly",
+        "`tofu validate` passes in `environments/shared/` and `environments/dedicated/`",
+        "`tofu fmt -check` passes",
+        "`tofu validate` passes",
+        "`tofu plan` completes without errors",
+        "`checkov -d . --framework opentofu --compact` passes with 0 unsuppressed critical/high findings or documented suppressions",
+        "`tflint --recursive` passes"
+      ],
+      "priority": 4,
+      "passes": true,
+      "notes": "Depends on networking layer (US-002) so spoke subnets are available for VMSS placement.",
+      "dependsOn": [
+        "US-002"
+      ],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-006",
+      "title": "Configure FSLogix profile containers via AADDS and Group Policy",
+      "description": "As a security architect, I want FSLogix profile containers configured through AADDS Group Policy Objects so that session hosts automatically mount user profile VHDs without manual configuration.",
+      "acceptanceCriteria": [
+        "`modules/aadds/main.tf`: verify or replace `azurerm_active_directory_domain_service_group_policy` — if it does not exist in azurerm 4.x, replace with `null_resource` + documented PowerShell/Azure CLI approach using `azurerm_virtual_machine_extension`",
+        "FSLogix registry keys documented/applied: `Enabled = 1`, `VHDLocations`, `DeleteLocalProfileWhenVHDShouldApply = 1`, `FlipFlopProfileDirectoryName = 1`",
+        "AADDS deployed in hub resource group with subnet `snet-aadds` (10.0.5.0/24) added to `networking/hub-and-spoke/main.tf`",
+        "AADDS subnet NSG allows: TCP 636 (LDAPS), TCP/UDP 389 (LDAP), TCP/UDP 88 (Kerberos), TCP/UDP 53 (DNS) from spoke subnets",
+        "AADDS DNS server IPs exported as outputs and injected into all spoke VNet DNS server settings",
+        "`modules/aadds/variables.tf` adds `aadds_subnet_id` variable; removes dependency on non-existent `azurerm_resource_group.this` inside module",
+        "`modules/fslogix/main.tf` `virtual_network_subnet_ids` dynamic block syntax corrected: use `virtual_network_subnet_ids = [var.subnet_id]` directly",
+        "`tofu fmt -check` passes",
+        "`tofu validate` passes",
+        "`tofu plan` completes without errors",
+        "`checkov -d . --framework opentofu --compact` passes with 0 unsuppressed critical/high findings or documented suppressions",
+        "`tflint --recursive` passes",
+        "Verify Checkov passes with no `CKV_AZURE_*` critical findings",
+        "Verify `tofu validate` succeeds within both `bootstrap/` and root module contexts"
+      ],
+      "priority": 5,
+      "passes": true,
+      "notes": "Depends on networking layer being in place for AADDS subnet.",
+      "dependsOn": [
+        "US-002"
+      ],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-005",
+      "title": "Implement per-customer Premium File Shares for FSLogix and App Attach",
+      "description": "As a platform architect, I want each customer to have a dedicated Azure Premium File Share for FSLogix profiles and a separate shared Premium File Share for App Attach packages, so that customer profile data is isolated and application delivery is centralized.",
+      "acceptanceCriteria": [
+        "`modules/storage/main.tf`: correct private endpoint `subresource_names` to `[\"file\"]` only for FileStorage accounts (remove invalid `\"blob\"` entry)",
+        "Each shared environment customer gets: one `FileStorage` Premium storage account + one `profiles` file share (100 GiB minimum, Premium tier)",
+        "One additional `FileStorage` Premium storage account in the shared spoke for App Attach with file share named `appattach` (configurable quota)",
+        "`modules/dedicated/` verified consistent with above schema; `appattach` share support added via optional variable",
+        "All FSLogix storage accounts: `https_traffic_only_enabled = true`, `min_tls_version = \"TLS1_2\"`, `allow_nested_items_to_be_public = false`, network rules default `Deny` with Private Endpoint",
+        "Private endpoints deployed into `snet-shared-storage` (shared) or `snet-dedicated-storage` (dedicated) — subnet added to dedicated spoke if missing",
+        "Private DNS A-records registered in hub Private DNS Zone `privatelink.file.core.windows.net`",
+        "RBAC: `Storage File Data SMB Share Contributor` assigned to AADDS computer accounts / Entra groups per customer",
+        "Outputs expose storage account names, file share names, and private endpoint FQDNs",
+        "`tofu fmt -check` passes",
+        "`tofu validate` passes",
+        "`tofu plan` completes without errors",
+        "`checkov -d . --framework opentofu --compact` passes with 0 unsuppressed critical/high findings or documented suppressions",
+        "`tflint --recursive` passes",
+        "Verify Checkov passes with no `CKV_AZURE_*` critical findings",
+        "Verify `tofu validate` succeeds within both `bootstrap/` and root module contexts"
+      ],
+      "priority": 6,
+      "passes": true,
+      "notes": "Depends on networking (US-002) for private endpoints and AADDS (US-006) for RBAC group assignments.",
+      "dependsOn": [
+        "US-006"
+      ],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-004",
+      "title": "Configure shared RemoteApp-only host pool for multi-tenant LoB delivery",
+      "description": "As a platform operator, I want the shared AVD host pool configured as RemoteApp-only (no Published Desktop) with per-customer application groups, so that customers can only access the LoB application and not arbitrary desktop sessions.",
+      "acceptanceCriteria": [
+        "Shared host pool type: `Pooled`, `preferred_app_group_type = \"RailApplications\"`, load balancing: `BreadthFirst`",
+        "No `Desktop` application group created for the shared host pool",
+        "`azurerm_virtual_desktop_application_group` created with `type = \"RemoteApp\"` for the LoB application",
+        "`azurerm_virtual_desktop_application` resource created for the LoB application entry (name, path, command-line arguments as variables)",
+        "Per-customer Entra group can be assigned to the shared RemoteApp application group via `azurerm_role_assignment` (`Desktop Virtualization User`)",
+        "Scaling plan configured with `Weekdays` schedule: ramp up 07:00, peak 09:00-18:00, ramp down 18:00, off-peak 20:00",
+        "`environments/shared/customer.tf` updated: each customer entry maps to a role assignment on the shared RemoteApp application group",
+        "Workspace linked to RemoteApp application group",
+        "`tofu fmt -check` passes",
+        "`tofu validate` passes",
+        "`tofu plan` completes without errors",
+        "`checkov -d . --framework opentofu --compact` passes with 0 unsuppressed critical/high findings or documented suppressions",
+        "`tflint --recursive` passes"
+      ],
+      "priority": 7,
+      "passes": true,
+      "notes": "Depends on Flexible VMSS session hosts (US-003) and FSLogix storage (US-005) being in place.",
+      "dependsOn": [
+        "US-003",
+        "US-005"
+      ],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-007",
+      "title": "Update Azure Image Builder pipeline for Flexible VMSS golden image",
+      "description": "As a platform engineer, I want the Image Builder pipeline updated so that the golden image produced is compatible with Flexible VMSS deployment and includes FSLogix configured for AADDS-joined profile paths.",
+      "acceptanceCriteria": [
+        "`imaging/image-builder/main.tf`: image template `source` block changed from `\"ImageVersion\"` type to `\"PlatformImage\"` type with `publisher`, `offer`, `sku`, `version` variables",
+        "Shared Image Gallery image definition updated: `hyper_v_generation = \"V2\"`, `trusted_launch_enabled = true` for Flexible VMSS compatibility",
+        "Customization steps retained (Windows Update, Defender, Firewall, FSLogix, AVD optimizations); add step for FSLogix registry keys with placeholder profile path",
+        "Remove Chocolatey-based installation of `DirectoryServices-DomainController`; replace with `RSAT-AD-PowerShell` installation step only if needed",
+        "Add `sysprep` step at end: `type = \"WindowsRestart\"` + final `type = \"PowerShell\"` calling `sysprep.exe /generalize /oobe /shutdown /quiet`",
+        "`imaging/image-builder/variables.tf` adds: `source_image_publisher`, `source_image_offer`, `source_image_sku`, `source_image_version` (replaces `source_image_id`)",
+        "`imaging/image-builder/outputs.tf` exports `gallery_image_id` and `image_template_name`",
+        "`tofu fmt -check` passes",
+        "`tofu validate` passes",
+        "`tofu plan` completes without errors",
+        "`checkov -d . --framework opentofu --compact` passes with 0 unsuppressed critical/high findings or documented suppressions",
+        "`tflint --recursive` passes"
+      ],
+      "priority": 8,
+      "passes": true,
+      "notes": "Depends on US-003 (Flexible VMSS) and US-006 (AADDS/FSLogix) being complete.",
+      "dependsOn": [
+        "US-003",
+        "US-006"
+      ],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-009",
+      "title": "Add per-customer dedicated environment support with correct module composition",
+      "description": "As a platform engineer, I want the dedicated customer module to correctly compose networking, storage, AADDS integration, and AVD modules so that a new dedicated customer can be provisioned by adding a single call block in `environments/dedicated/`.",
+      "acceptanceCriteria": [
+        "`modules/dedicated/main.tf` updated: `module.avd` call adds missing `domain_join_config` variable pass-through; adds `fslogix_config` pass-through",
+        "`modules/dedicated/main.tf`: `module.networking` uses `modules/networking`; `azurerm_virtual_network_peering.reverse` bug fixed so dedicated spoke peers correctly to hub",
+        "`modules/dedicated/variables.tf` adds: `hub_vnet_id`, `aadds_dns_servers` (list of IPs), `hub_firewall_private_ip`, `avd_image_id`",
+        "`modules/dedicated/main.tf` adds: `azurerm_route_table` + `azurerm_subnet_route_table_association` routing all spoke traffic through hub firewall (`0.0.0.0/0 -> var.hub_firewall_private_ip`)",
+        "`modules/dedicated/main.tf` adds: VNet DNS servers set to `var.aadds_dns_servers` on the spoke VNet",
+        "`environments/dedicated/customer-example.tf` updated to pass new required variables from networking layer outputs",
+        "`environments/dedicated/` has its own `backend.hcl` with state key `environments/dedicated`",
+        "`tofu fmt -check` passes",
+        "`tofu validate` passes",
+        "`tofu plan` completes without errors",
+        "`checkov -d . --framework opentofu --compact` passes with 0 unsuppressed critical/high findings or documented suppressions",
+        "`tflint --recursive` passes"
+      ],
+      "priority": 9,
+      "passes": true,
+      "notes": "Depends on US-004 (shared AVD host pool), US-005 (FSLogix storage), and US-006 (AADDS).",
+      "dependsOn": [
+        "US-004",
+        "US-005",
+        "US-006"
+      ],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-010",
+      "title": "Implement RBAC and IAM for multi-tenant isolation",
+      "description": "As a security architect, I want fine-grained RBAC and IAM configured so that each customer in the shared environment can only access their own application group, file share, and data, with all assignments managed as code.",
+      "acceptanceCriteria": [
+        "`modules/customer/main.tf` updated: `azurerm_role_assignment` for `Desktop Virtualization User` on customer's RemoteApp application group; `azurerm_role_assignment` for `Storage File Data SMB Share Contributor` on customer's FSLogix file share",
+        "`modules/customer/variables.tf` adds: `application_group_id`, `fslogix_storage_account_id`, `customer_entra_group_object_id`",
+        "Managed identity (System Assigned) on session hosts granted `Storage File Data SMB Share Contributor` on shared FSLogix storage accounts",
+        "Service principal for OpenTofu automation documented in `BACKEND.md` with minimum required roles",
+        "All `azurerm_role_assignment` resources include `skip_service_principal_aad_check = false` where applicable",
+        "Audit diagnostic settings: `azurerm_monitor_diagnostic_setting` added to Log Analytics for AVD host pools and application groups",
+        "`tofu fmt -check` passes",
+        "`tofu validate` passes",
+        "`tofu plan` completes without errors",
+        "`checkov -d . --framework opentofu --compact` passes with 0 unsuppressed critical/high findings or documented suppressions",
+        "`tflint --recursive` passes"
+      ],
+      "priority": 10,
+      "passes": true,
+      "notes": "Depends on US-004 (application groups) and US-005 (storage accounts) being in place.",
+      "dependsOn": [
+        "US-004",
+        "US-005"
+      ],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-008",
+      "title": "Implement Checkov integration (pre-commit and CI pipeline)",
+      "description": "As a security engineer, I want Checkov scanning integrated into both local pre-commit hooks and a CI pipeline so that all OpenTofu configurations are validated for security misconfigurations before merge and before deployment.",
+      "acceptanceCriteria": [
+        "`.pre-commit-config.yaml` created at repo root with: `checkov` hook targeting `--framework terraform --compact --quiet`; `tofu fmt` hook; `tflint` hook",
+        "`checkov-config.yaml` created with: `framework: terraform`, `output: cli,json`, `output-file-path: reports/checkov`, `skip-check: []`",
+        "GitHub Actions workflow `.github/workflows/checkov.yml` created: triggers on `push` and `pull_request` to `main`; runs `tofu fmt -check`, `tofu validate`, `tflint --recursive`, `checkov -d . --framework terraform --compact`; uploads Checkov JSON report as artifact",
+        "All existing `#checkov:skip=CKV_AZURE_33` inline suppressions in `imaging/image-builder/main.tf` documented with justification comments",
+        "`reports/` directory added to `.gitignore`",
+        "`CHECKOV.md` created documenting: local run instructions, CI integration, suppression policy, list of suppressed checks with justifications",
+        "All modules pass Checkov with 0 unsuppressed critical/high findings",
+        "`tofu fmt -check` passes",
+        "`tofu validate` passes",
+        "`tofu plan` completes without errors",
+        "`checkov -d . --framework opentofu --compact` passes with 0 unsuppressed critical/high findings or documented suppressions",
+        "`tflint --recursive` passes"
+      ],
+      "priority": 11,
+      "passes": true,
+      "notes": "Can be done after US-011 (code defects fixed) so scans don't fail on known bugs.",
+      "dependsOn": [
+        "US-011"
+      ],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-012",
+      "title": "Integrate Azure Verified Modules for networking and storage",
+      "description": "As a platform engineer, I want to evaluate and integrate Azure Verified Modules for VNet, storage, and AVD components so that we leverage Microsoft-supported, well-tested patterns where they reduce custom code.",
+      "acceptanceCriteria": [
+        "Research AVM registry: `azure/avm-res-network-virtualnetwork`, `azure/avm-res-storage-storageaccount`, `azure/avm-res-desktopvirtualization-hostpool`",
+        "For each evaluated AVM: document in `AVM.md` whether adopted or rejected, and why",
+        "If AVM for VNet adopted: replace `modules/networking/main.tf` VNet + subnet resources with AVM call; wrap in thin module if customization needed",
+        "If AVM for storage adopted: replace `modules/storage/main.tf` storage account resources with AVM call",
+        "All AVM sources pinned to a specific version tag (no `latest`)",
+        "`.terraform.lock.hcl` updated after AVM integration",
+        "`tofu fmt -check` passes",
+        "`tofu validate` passes",
+        "`tofu plan` completes without errors",
+        "`checkov -d . --framework opentofu --compact` passes with 0 unsuppressed critical/high findings or documented suppressions",
+        "`tflint --recursive` passes"
+      ],
+      "priority": 12,
+      "passes": true,
+      "notes": "Depends on US-002 (networking) and US-005 (storage) being complete before evaluating replacements.",
+      "dependsOn": [
+        "US-002",
+        "US-005"
+      ],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-013",
+      "title": "Improve documentation and add operational runbooks",
+      "description": "As an operations team, I want comprehensive, updated documentation reflecting all architectural decisions and correct deployment order so that the environment can be deployed, operated, and extended without expert assistance.",
+      "acceptanceCriteria": [
+        "`README.md` updated: architecture overview, hub-and-spoke topology, module map, deployment order (bootstrap → networking → imaging → shared/dedicated)",
+        "`WORKSPACES.md` updated: explains each OpenTofu workspace/root module, its state key, prerequisites, and deployment command",
+        "`BACKEND.md` updated: OIDC setup instructions for GitHub Actions and Azure DevOps; required service principal roles",
+        "`docs/runbook-add-customer.md` created: step-by-step for adding a new shared customer and a new dedicated customer",
+        "`docs/runbook-image-update.md` created: how to trigger a new golden image build and roll out to session hosts",
+        "`docs/architecture-decisions.md` created: captures decisions (shared RemoteApp only, Flexible VMSS, AADDS in hub, Checkov dual integration)",
+        "All `.tf` files have module-level description comments at top",
+        "`tofu fmt -check` passes",
+        "`tofu validate` passes",
+        "`tofu plan` completes without errors",
+        "`checkov -d . --framework opentofu --compact` passes with 0 unsuppressed critical/high findings or documented suppressions",
+        "`tflint --recursive` passes"
+      ],
+      "priority": 13,
+      "passes": true,
+      "notes": "Documentation story — can be done last once all implementation stories are complete.",
+      "dependsOn": [
+        "US-001",
+        "US-002",
+        "US-003",
+        "US-004",
+        "US-005",
+        "US-006",
+        "US-007",
+        "US-008",
+        "US-009",
+        "US-010",
+        "US-011",
+        "US-012"
+      ],
+      "completionNotes": "Completed by agent"
+    }
+  ],
+  "metadata": {
+    "updatedAt": "2026-03-19T07:05:26.420Z"
+  }
+}

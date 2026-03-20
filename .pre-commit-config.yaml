@@ -1,0 +1,28 @@
+repos:
+  # OpenTofu / Terraform formatting
+  - repo: https://github.com/opentofu/opentofu
+    rev: v1.11.5
+    hooks:
+      - id: tofu_fmt
+        args: []
+
+  # tflint - Terraform linting
+  - repo: https://github.com/terraform-linters/tflint
+    rev: v0.55.0
+    hooks:
+      - id: tflint
+        args:
+          - --recursive
+
+  # Checkov - security scanning
+  - repo: https://github.com/bridgecrewio/checkov
+    rev: 3.2.500
+    hooks:
+      - id: checkov
+        args:
+          - --framework
+          - terraform
+          - --compact
+          - --quiet
+          - --config-file
+          - checkov-config.yaml
