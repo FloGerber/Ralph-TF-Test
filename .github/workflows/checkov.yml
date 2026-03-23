@@ -1,0 +1,77 @@
+name: Checkov Security Scan
+
+# tofu apply regenerates registration token on each run by design
+# (azurerm_virtual_desktop_host_pool_registration_info uses timeadd(timestamp(), "2h") — see ADR-009)
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  checkov:
+    name: Security Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up OpenTofu
+        uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: "1.11.5"
+
+      - name: Set up TFLint
+        uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: v0.55.0
+
+      - name: Check OpenTofu formatting
+        run: tofu fmt -check -recursive
+        working-directory: ${{ github.workspace }}
+
+      - name: Validate root module
+        run: tofu validate
+        working-directory: ${{ github.workspace }}
+        env:
+          # Provide dummy credentials to allow validate without backend
+          ARM_SUBSCRIPTION_ID: "00000000-0000-0000-0000-000000000000"
+          ARM_TENANT_ID: "00000000-0000-0000-0000-000000000000"
+          ARM_CLIENT_ID: "00000000-0000-0000-0000-000000000000"
+          ARM_CLIENT_SECRET: "dummy"
+
+      - name: Run TFLint
+        run: tflint --recursive
+        working-directory: ${{ github.workspace }}
+
+      - name: Create reports directory
+        run: mkdir -p reports/checkov
+
+      - name: Run Checkov
+        id: checkov
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: .
+          framework: terraform
+          compact: true
+          quiet: true
+          output_format: cli,json
+          output_file_path: reports/checkov
+          config_file: checkov-config.yaml
+        continue-on-error: false
+
+      - name: Upload Checkov JSON report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: checkov-report
+          path: reports/checkov/
+          retention-days: 30

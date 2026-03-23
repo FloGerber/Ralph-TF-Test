@@ -1,0 +1,190 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '**'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - '**'
+  workflow_dispatch:
+    inputs:
+      manifest:
+        description: 'Onboarding manifest path (for deploying a customer)'
+        required: false
+        default: ''
+      target:
+        description: 'Deployment target (bootstrap|shared|dedicated|all)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  select-deployment:
+    name: Determine Deployment
+    runs-on: ubuntu-latest
+    outputs:
+      target: ${{ steps.set.outputs.target }}
+      manifest: ${{ steps.set.outputs.manifest }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Parse inputs and manifest
+        id: set
+        run: |
+          # Default to 'all' unless manifest or explicit target provided
+          TARGET="${{ github.event.inputs.target }}"
+          MANIFEST="${{ github.event.inputs.manifest }}"
+          if [ -n "$MANIFEST" ]; then
+            if [ ! -f "$MANIFEST" ]; then
+              echo "Manifest '$MANIFEST' not found in repo. Failing." >&2
+              exit 2
+            fi
+            # Read environment from manifest (shared|dedicated)
+            ENV=$(jq -r '.environment // "shared"' "$MANIFEST")
+            if [ "$ENV" = "null" ]; then ENV="shared"; fi
+            TARGET="$ENV"
+            echo "Parsed environment '$ENV' from manifest $MANIFEST"
+          fi
+          if [ -z "$TARGET" ]; then TARGET="all"; fi
+          echo "target=$TARGET" >> $GITHUB_OUTPUT
+          if [ -n "$MANIFEST" ]; then echo "manifest=$MANIFEST" >> $GITHUB_OUTPUT; else echo "manifest=" >> $GITHUB_OUTPUT; fi
+
+  lint-validate:
+    name: Format / Validate / Tests
+    runs-on: ubuntu-latest
+    needs: select-deployment
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up OpenTofu
+        uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: "1.11.5"
+
+      - name: Check OpenTofu formatting
+        run: tofu fmt -check -recursive
+
+      - name: Validate root module
+        env:
+          ARM_SUBSCRIPTION_ID: "00000000-0000-0000-0000-000000000000"
+          ARM_TENANT_ID: "00000000-0000-0000-0000-000000000000"
+          ARM_CLIENT_ID: "00000000-0000-0000-0000-000000000000"
+          ARM_CLIENT_SECRET: "dummy"
+        run: tofu validate
+
+      - name: Install TFLint
+        uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: v0.55.0
+
+      - name: Run TFLint
+        run: tflint --recursive || true
+
+      - name: Setup Terraform (for terraform test)
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: 1.6.7
+
+      - name: Run terraform tests in module tests
+        run: |
+          set -e
+          # Discover test directories containing *.tftest.hcl
+          TEST_DIRS=$(git ls-files "**/tests/*.tftest.hcl" | sed 's#/[^/]*$##' | sort -u)
+          if [ -z "$TEST_DIRS" ]; then
+            echo "No terraform tests found"
+            exit 0
+          fi
+          for d in $TEST_DIRS; do
+            echo "Running terraform test in $d"
+            (cd "$d" && terraform init -backend=false && terraform test)
+          done
+
+  security-scan:
+    name: Policy & Security Scans (Checkov)
+    runs-on: ubuntu-latest
+    needs: select-deployment
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Create reports directory
+        run: mkdir -p reports/checkov
+
+      - name: Run Checkov
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: .
+          framework: terraform
+          compact: true
+          quiet: true
+          output_format: cli,json
+          output_file_path: reports/checkov
+          config_file: checkov-config.yaml
+
+  plan:
+    name: Plan
+    runs-on: ubuntu-latest
+    needs: [select-deployment, lint-validate, security-scan]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up OpenTofu
+        uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: "1.11.5"
+
+      - name: Choose directories to plan
+        id: dirs
+        run: |
+          TARGET=${{ needs.select-deployment.outputs.target }}
+          echo "Deployment target: $TARGET"
+          DIRS=""
+          if [ "$TARGET" = "all" ] || [ "$TARGET" = "bootstrap" ]; then DIRS="$DIRS bootstrap"; fi
+          if [ "$TARGET" = "all" ] || [ "$TARGET" = "shared" ]; then DIRS="$DIRS environments/shared"; fi
+          if [ "$TARGET" = "all" ] || [ "$TARGET" = "dedicated" ]; then DIRS="$DIRS environments/dedicated"; fi
+          echo "dirs=$DIRS" >> $GITHUB_OUTPUT
+
+      - name: Run plans
+        run: |
+          set -e
+          for d in ${{ steps.dirs.outputs.dirs }}; do
+            if [ ! -d "$d" ]; then echo "Skipping missing dir $d"; continue; fi
+            echo "Planning $d"
+            cd "$d"
+            tofu init -backend=false || true
+            tofu plan -out="${{ runner.temp }}/$(basename $d).tfplan" || true
+            cd - >/dev/null
+          done
+
+  apply:
+    name: Apply (gated)
+    needs: plan
+    runs-on: ubuntu-latest
+    environment: production
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up OpenTofu
+        uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: "1.11.5"
+
+      - name: Find plans and apply
+        run: |
+          set -e
+          for f in $(ls $RUNNER_TEMP/*.tfplan 2>/dev/null || true); do
+            echo "Applying plan $f"
+            tofu apply -auto-approve "$f" || exit 1
+          done
+          echo "No plans found to apply if none were created"

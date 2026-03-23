@@ -1,0 +1,12 @@
+{
+  "customer_name": "contoso",
+  "display_name": "Contoso Ltd",
+  "environment": "dedicated",
+  "contact_email": "onboard@contoso.example",
+  "location": "westeurope",
+  "tags": {"CostCenter":"67890","Owner":"contoso-ops"},
+  "subscription_id": "00000000-0000-0000-0000-000000000001",
+  "hub_vnet_id": "/subscriptions/00000000-0000-0000-0000-000000000002/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub",
+  "avd_image_id": "",
+  "user_count": 25
+}

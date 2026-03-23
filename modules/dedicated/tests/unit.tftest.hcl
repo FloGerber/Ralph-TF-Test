@@ -88,7 +88,8 @@ mock_provider "azurerm" {
 
   mock_resource "azurerm_virtual_desktop_host_pool_registration_info" {
     defaults = {
-      id    = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-dedicated-test/providers/Microsoft.DesktopVirtualization/hostPools/hp-dedicated-test/registrationInfo/default"
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-dedicated-test/providers/Microsoft.DesktopVirtualization/hostPools/hp-dedicated-test/registrationInfo/default"
+      # checkov:skip=CKV_SECRET_6: test fixture value, not a real secret
       token = "registration-token"
     }
   }
@@ -110,6 +111,7 @@ mock_provider "azurerm" {
 mock_provider "random" {
   mock_resource "random_password" {
     defaults = {
+      # checkov:skip=CKV_SECRET_6: test fixture password, not a real secret
       id     = "session-host-password"
       result = "P@ssw0rd!P@ssw0rd!12"
     }

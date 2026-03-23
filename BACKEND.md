@@ -8,6 +8,7 @@ This project uses Azure Blob Storage for remote state storage with the following
 - Encryption at rest (Microsoft-managed keys, enabled by default)
 - Layer-based state isolation (separate state key per root module)
 - OIDC federated credential authentication for CI/CD (no long-lived secrets)
+ - Strong delivery security controls (see Security Requirements below)
 
 ---
 
@@ -106,6 +107,8 @@ jobs:
 | `AZURE_CLIENT_ID` | App (client) ID of the service principal |
 | `AZURE_TENANT_ID` | Azure AD tenant ID |
 | `AZURE_SUBSCRIPTION_ID` | Target Azure subscription ID |
+
+> Security note: storing storage account keys or other long-lived credentials in repository secrets is forbidden for normal delivery pipelines. Use OIDC workload identity and short-lived tokens only. The only allowed use of access keys is explicit out-of-band emergency debugging and must be approved and rotated immediately.
 
 ### Step 1b: Azure DevOps — Federated Credentials
 
@@ -236,6 +239,64 @@ This creates:
 - Azure Policy: CostCenter tag audit
 - Microsoft Defender for Cloud: VirtualMachines (Standard tier)
 - Role assignment: `Storage Blob Data Contributor` on state storage for the OIDC service principal
+
+## Security Requirements
+
+- OIDC workload identity is required for all automated delivery pipelines. Static secrets (storage account access keys, service principal client secrets) are forbidden for normal delivery. Emergency use of access keys is allowed only with documented approval and rotation.
+- Remote backend MUST be Azure Blob Storage with blob versioning and immutability (time-based retention or legal hold) enabled on the `tfstate` container to protect against accidental or malicious deletion.
+- State files and plan outputs MUST be encrypted client-side using AES-GCM (AES-256-GCM recommended) before being uploaded to the backend. CI/CD pipelines must perform encryption and decryption steps as part of their workflow; keys for AES-GCM MUST be retrieved at runtime from a secure secrets store (for example, Azure Key Vault) using the OIDC identity. Keys MUST never be embedded in repository secrets.
+
+Example high-level pipeline encryption workflow (conceptual):
+
+1. Pipeline authenticates to Azure via OIDC and fetches an ephemeral data-encryption-key (DEK) from Azure Key Vault (Key Vault access granted to OIDC identity via a short-lived role assignment / access policy).
+2. Run `tofu plan -out=plan.tfplan` (or `tofu apply -refresh-only -out=state.tfstate` as needed).
+3. Encrypt `plan.tfplan` and any state artifacts with AES-256-GCM using the DEK and upload the encrypted blob to the storage container under the root module key. Example (pseudocode):
+
+```bash
+# fetch DEK into $DEK (kept only in memory / ephemeral agent)
+# produce plan
+tofu plan -out=plan.tfplan
+# encrypt (pipeline must implement a tested script/tool using AES-GCM)
+./bin/encrypt-aes-gcm --key-env DEK --in plan.tfplan --out plan.tfplan.enc
+# upload encrypted blob to storage (backend may still perform locking/versioning)
+az storage blob upload --file plan.tfplan.enc --container-name tfstate --name "environments/shared.plan.enc"
+```
+
+Notes:
+- The repository should include a small, auditable `scripts/encrypt-aes-gcm` helper (or recommend a vetted upstream tool) used by pipelines to perform client-side AES-GCM encryption. The helper MUST support authenticated associated data (AAD) to bind the blob key to the workspace/key path.
+- When `tofu init` / the backend client needs to read state, the pipeline must download the encrypted blob, decrypt with the DEK (fetched from Key Vault) and then provide the plaintext state to `tofu` locally. This ensures the remote backend never stores plaintext state.
+
+## Immutability & Versioning
+
+- Enable Blob versioning on the storage account to retain prior versions of state files.
+- Enable soft-delete and configure retention (at least 30 days) to recover from accidental deletes.
+- Configure the container with Immutable Storage for Azure Blobs (time-based retention or legal hold) if organizational policy requires write-once retention for state. Understand that strict immutability will interact with state lifecycle and may require an authorized process for retention removal.
+
+Azure CLI example (high-level) to enable versioning & soft-delete:
+
+```bash
+az storage account blob-service-properties update \
+  -g rg-tfstate-prod -n tfstatestorage --enable-versioning true --enable-delete-retention true --delete-retention-days 30
+```
+
+For immutable storage (container-level) see Azure docs on "Immutable storage for blobs" and plan an operational process for retention expiry or legal holds.
+
+## Backend Bootstrap Dependencies
+
+- The bootstrap layer must be applied before any downstream layer to provision the storage account, container, and network controls.
+- Bootstrap outputs MUST include: storage account name, container name, resource group name, subscription id, tenant id, and the OIDC guidance values (`oidc_sp_app_id`, `oidc_sp_object_id`). This repository follows the `backend_config` / `oidc_guidance` bootstrap outputs pattern.
+- The bootstrap must also document and (optionally) create the RBAC role assignment giving the OIDC service principal `Storage Blob Data Contributor` scoped to the storage account or container. Grant the least-privilege scope possible (container or specific blob prefix) and prefer using Azure RBAC over shared access keys.
+
+## Access Controls — High Level
+
+- Pipelines: each pipeline (or pipeline environment like `deploy-main`, `pr-plan`) should have a distinct federated credential subject and map to a single OIDC workload identity (Azure AD app + federated credential). Assign minimal roles to each identity: `Storage Blob Data Reader`/`Contributor` scoped to the state container path used by that pipeline and resource-specific roles needed for resource provisioning.
+- Key Management: store DEKs and KMS-wrapped keys in Azure Key Vault. Grant access to Key Vault for OIDC identities using Azure RBAC or Key Vault access policies and require `get`/`unwrapKey` for the pipeline identity only. Rotate and audit KEKs regularly.
+- Storage Account: restrict network access with Private Endpoint and Storage Account Firewall rules. Disable public blob access. Use Azure Defender for Storage and enable logging/auditing to the central Log Analytics workspace.
+- Separation of Duties: bootstrap operators (who create the storage account) should be separate from pipeline identities that perform plan/apply. Administrative roles that can change immutability/retention settings should require an elevated, ticketed workflow.
+
+## Emergency Fallback (Not Normal Delivery)
+
+The repository documents a fallback that uses storage account access keys for extreme debugging only. This is explicitly forbidden for normal automated delivery and must be treated as an emergency-only, manually-approved recovery path. If used, rotate keys immediately and record the incident.
 
 ### Step 2: Populate `backend.hcl`
 

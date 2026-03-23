@@ -1,0 +1,11 @@
+{
+  "customer_name": "acme",
+  "display_name": "Acme Corporation",
+  "environment": "shared",
+  "contact_email": "ops@acme.example",
+  "location": "eastus",
+  "tags": {"CostCenter":"12345","Owner":"acme-ops"},
+  "workspace_id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shared/providers/Microsoft.DesktopVirtualization/hostpools/wp-acme-workspace",
+  "fslogix_profile_share": "acme-profiles",
+  "customer_entra_group_object_id": ""
+}
